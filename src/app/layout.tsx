@@ -26,7 +26,8 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "Z.ai" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/favicon.svg",
+    apple: "/favicon.svg",
   },
   openGraph: {
     title: "PDF → PNG Converter",
