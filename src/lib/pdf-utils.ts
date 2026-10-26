@@ -98,18 +98,59 @@ export function downloadBlob(blob: Blob, filename: string) {
 }
 
 /**
- * Share a PNG via WhatsApp.
+ * Copy text to the clipboard, gracefully failing when the clipboard
+ * API is not available (e.g. non-secure context).
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    /* fall through to legacy */
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Share a PNG via WhatsApp, optionally with a pre-filled text message.
  *
  * Strategy:
- *  1. On mobile / browsers that support navigator.share with files,
- *     use the native share sheet — WhatsApp will appear as a target.
- *  2. Otherwise, open WhatsApp Web with a text hint and trigger an
- *     automatic download so the user can manually attach the file.
+ *  - If a message is provided, copy it to the clipboard first so the user
+ *    can paste it into WhatsApp in one tap (useful for repetitive work).
+ *  - On mobile / browsers that support navigator.share with files, use the
+ *    native share sheet — WhatsApp will appear as a target, and the message
+ *    is passed as the share `text` (some clients auto-fill it).
+ *  - Otherwise (desktop), download the file and open wa.me/?text=... which
+ *    opens WhatsApp Web with the message pre-filled in a new chat composer.
  */
 export async function sharePngViaWhatsApp(
   blob: Blob,
   filename: string,
+  message?: string,
 ): Promise<'shared' | 'fallback'> {
+  const trimmed = (message ?? '').trim()
+
+  // Pre-copy the message to the clipboard so the user can paste it
+  // even if the WhatsApp client ignores the share `text` field.
+  let copied = false
+  if (trimmed) {
+    copied = await copyToClipboard(trimmed)
+  }
+
   const file = new File([blob], filename, { type: 'image/png' })
 
   // Try the native share API with files (works great on mobile)
@@ -123,7 +164,7 @@ export async function sharePngViaWhatsApp(
       await (navigator as any).share({
         files: [file],
         title: filename,
-        text: '',
+        text: trimmed,
       })
       return 'shared'
     } catch (err: any) {
@@ -132,15 +173,32 @@ export async function sharePngViaWhatsApp(
     }
   }
 
-  // Fallback: download the file + open WhatsApp Web so the user can attach it
+  // Fallback: download the file + open WhatsApp with the message pre-filled
   downloadBlob(blob, filename)
 
   // Detect mobile to choose between wa.me (mobile) and web.whatsapp.com (desktop)
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-  if (isMobile) {
-    window.open('https://wa.me/', '_blank')
-  } else {
-    window.open('https://web.whatsapp.com/', '_blank')
+  const waUrl = trimmed
+    ? `https://wa.me/?text=${encodeURIComponent(trimmed)}`
+    : isMobile
+      ? 'https://wa.me/'
+      : 'https://web.whatsapp.com/'
+
+  window.open(waUrl, '_blank')
+
+  // Hint the user about the clipboard fallback
+  if (trimmed && copied) {
+    // small delay so the toast appears after the WhatsApp tab opens
+    setTimeout(() => {
+      try {
+        // Use a custom event so the caller can show its own toast if desired
+        window.dispatchEvent(
+          new CustomEvent('whatsapp-message-copied', { detail: { message: trimmed } }),
+        )
+      } catch {
+        /* noop */
+      }
+    }, 300)
   }
   return 'fallback'
 }

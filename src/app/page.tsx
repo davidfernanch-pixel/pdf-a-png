@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import {
   FileText,
@@ -12,6 +12,8 @@ import {
   ImageIcon,
   AlertCircle,
   Package,
+  MessageSquare,
+  Eraser,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -20,6 +22,7 @@ import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -45,13 +48,49 @@ function sanitizeBaseName(name: string): string {
   return name.replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9_-]+/g, '_') || 'pagina'
 }
 
+const MESSAGE_STORAGE_KEY = 'pdf-to-png:whatsapp-message'
+
 export default function Home() {
   const [pdf, setPdf] = useState<ProcessedPdf | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [scale, setScale] = useState(2)
   const [error, setError] = useState<string | null>(null)
+  const [whatsappMessage, setWhatsappMessage] = useState('')
   const abortRef = useRef<AbortController | null>(null)
+
+  // Load saved message from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(MESSAGE_STORAGE_KEY)
+      if (saved !== null) {
+        setWhatsappMessage(saved)
+      }
+    } catch {
+      /* localStorage may be unavailable */
+    }
+  }, [])
+
+  // Persist message to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(MESSAGE_STORAGE_KEY, whatsappMessage)
+    } catch {
+      /* ignore */
+    }
+  }, [whatsappMessage])
+
+  // Listen for the clipboard-copied hint dispatched by sharePngViaWhatsApp
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.message) {
+        toast.info('Mensaje copiado al portapapeles. Pégalo en WhatsApp con Ctrl+V.')
+      }
+    }
+    window.addEventListener('whatsapp-message-copied', handler)
+    return () => window.removeEventListener('whatsapp-message-copied', handler)
+  }, [])
 
   const processFile = useCallback(
     async (file: File, renderScale: number) => {
@@ -134,11 +173,11 @@ export default function Home() {
 
   const handleWhatsApp = async (page: RenderedPage) => {
     const filename = `${pdf!.baseName}_pag_${page.pageNumber}.png`
-    const result = await sharePngViaWhatsApp(page.blob, filename)
+    const result = await sharePngViaWhatsApp(page.blob, filename, whatsappMessage)
     if (result === 'shared') {
       toast.success('Abriendo WhatsApp…')
     } else {
-      toast.info('Imagen descargada. Átacha manualmente en WhatsApp Web.')
+      toast.info('Imagen descargada. Adjúntala en WhatsApp Web.')
     }
   }
 
@@ -164,11 +203,11 @@ export default function Home() {
         filename: `${pdf.baseName}_pag_${p.pageNumber}.png`,
       })),
     )
-    const result = await sharePngViaWhatsApp(zip, `${pdf.baseName}_png.zip`)
+    const result = await sharePngViaWhatsApp(zip, `${pdf.baseName}_png.zip`, whatsappMessage)
     if (result === 'shared') {
       toast.success('Abriendo WhatsApp…')
     } else {
-      toast.info('ZIP descargado. Átacha manualmente en WhatsApp Web.')
+      toast.info('ZIP descargado. Adjúntalo en WhatsApp Web.')
     }
   }
 
@@ -386,6 +425,56 @@ export default function Home() {
                 </Button>
               </div>
             </div>
+
+            {/* Reusable WhatsApp message */}
+            <Card className="mb-6 border-emerald-200/60 dark:border-emerald-900/40">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center">
+                      <MessageSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    </div>
+                    <div>
+                      <Label htmlFor="wa-message" className="text-sm font-medium">
+                        Mensaje para WhatsApp
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Se copia al portapapeles y se rellena en WhatsApp. Se guarda en este navegador para usos futuros.
+                      </p>
+                    </div>
+                  </div>
+                  {whatsappMessage && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs text-muted-foreground"
+                      onClick={() => setWhatsappMessage('')}
+                    >
+                      <Eraser className="w-3.5 h-3.5 mr-1" />
+                      Borrar
+                    </Button>
+                  )}
+                </div>
+                <Textarea
+                  id="wa-message"
+                  value={whatsappMessage}
+                  onChange={(e) => setWhatsappMessage(e.target.value)}
+                  placeholder="Ej: Hola, te adjunto las páginas del documento solicitado."
+                  className="min-h-[80px] resize-y"
+                  rows={3}
+                />
+                <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+                  <span>
+                    {whatsappMessage.trim()
+                      ? `Se enviará junto con cada imagen / ZIP (${whatsappMessage.trim().length} caracteres)`
+                      : 'Sin mensaje — solo se compartirán las imágenes'}
+                  </span>
+                  <span className="hidden sm:inline">
+                    💡 Tip: escribe el mensaje una vez y reutilízalo en cada conversación
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
               {pdf.pages.map((page) => (
